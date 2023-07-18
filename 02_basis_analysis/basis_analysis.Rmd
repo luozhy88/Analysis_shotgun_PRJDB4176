@@ -1,0 +1,791 @@
+
+
+
+## Load library
+```{r load packages, results='hide', message=F, warning=F,include=F}
+rm(list=ls())
+library(phyloseq)
+library(PCAtools)
+library(microbiome)
+library(tibble)
+library(dplyr)
+```
+
+## Import phyloseq
+```{r load data, message=F, warning=F,include=T}
+ps <- readRDS("../input_raw/shotgun_phyloseq.rds")
+sample_names(ps)<-gsub("\\.bracken.mpa.report.*","",sample.names(ps))
+meta_df<- read.csv("~/data/Projects/YNYK/Analysis_shotgun_SRP373424/input_raw/SRP373424_meta.csv") 
+rownames(meta_df)<-meta_df$Run
+meta_df$Age<-meta_df$Age_at_collection
+meta_df$Groups1<-meta_df$Case_status
+meta_df$Gender<-meta_df$sex
+
+print(ps) # 3893009 taxa and 40 samples
+sample_data(ps)<-meta_df
+
+
+
+
+# library(readxl)
+# sixhos_shotgun_AD_NC_meta_v2 <- readxl::read_excel("../data/metadata/sixhos_shotgun.AD_NC.meta.v2.xlsx") %>% data.frame()
+# rownames(sixhos_shotgun_AD_NC_meta_v2)<- gsub("-","_",sixhos_shotgun_AD_NC_meta_v2$Fecal_ID)
+# sixhos_shotgun_AD_NC_meta_v2$Groups <- sixhos_shotgun_AD_NC_meta_v2$Groups1
+# taxx<-tax_table(ps) %>% data.frame() #%>% dplyr::filter(Phylum != "" )
+# taxx[taxx==""]="Unclassified"
+# tax_table(ps)<-taxx %>% as.matrix()
+```
+
+## Data processing
+```{r}
+# processing raw data as needed
+phy_core <- core(ps, detection = 5, prevalence = .1) # change parameter if needed
+print(phy_core)   # 599653 taxa and 40 samples
+# sample_names(phy_core)<- gsub("Raw.read.count.","",sample.names(phy_core) )
+
+# sample_data(phy_core)<-sixhos_shotgun_AD_NC_meta_v2
+```
+
+## PCA
+```{r, message=F,warning=F,include=T}
+phy_tmp <- microbiome::transform(phy_core,transform = "clr") # clr transformation 
+x <- abundances(phy_tmp) 
+dim(x) # 473 62
+
+
+
+
+metat_sele <- meta(phy_tmp) %>% select("Groups1","Age","Gender")
+dim(metat_sele) # 62 6
+
+metat_sele$Groups1 <- factor(metat_sele$Groups1,levels = c("Control","PD"))
+metat_sele$Groups <- metat_sele$Groups1
+metat_sele$Gender <- factor(metat_sele$Gender,levels = c("male","female"))
+metat_sele$Age <- as.numeric(metat_sele$Age)
+
+
+dim(metat_sele) # 62 7
+
+p <- PCAtools::pca(x,metadata=metat_sele,center = T,scale = T)
+```
+
+### Screeplot
+```{r, message=F,warning=F,echo=F,fig.height= 8, fig.width=6,eval=T}
+dir.create("result/01_PCA",recursive = TRUE)
+screeplot(p,axisLabSize = 10,components = 1:20) 
+ggsave("result/01_PCA/screeplot.pdf",width = 8,height = 8)
+```
+
+### Biplot
+```{r, message=F,warning=F,include=T,  fig.height= 7, fig.width=10}
+for (i in colnames(metat_sele)){ # loop for plot PCA
+ biplot(p,colby = i,lab=NULL,title = paste0("PCA ",i),legendPosition = "right",pointSize = 1.5,axisLabSize = 12,titleLabSize = 12,legendLabSize = 10,legendTitleSize = 10,legendIconSize = 2)
+ ggsave(filename = paste0("result/01_PCA/PCA_",i,".pdf"), width=6.5, height=6)
+}
+```
+
+
+
+
+
+
+## Alpha diversity
+
+### Load library
+
+```{r load packages, results='hide', message=F, warning=F,include=F}
+# rm(list=ls())
+library(phyloseq)
+library(microbiome)
+library(tibble)
+library(dplyr)
+library(vegan)
+library(flextable)
+library(ggpubr)
+library(gginnards)
+library(patchwork)
+```
+
+```{r set color , include=F}
+# color set
+mycols <<- c(
+  "#3cb44b", "#4363d8", "#e6194b","#ffe119", 
+  "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
+  "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
+  "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080",
+  "#000000"
+)
+```
+
+### Data prcessing
+
+```{r}
+# processing raw data as needed
+phy_tmp <- phy_core
+dir.create("result/02_alpha.diversity/")
+```
+
+
+```{r alpha fun,echo=F, results='hide', message=F, warning=F,include=F}
+plot_alpha <- function(input_phy,selected_col,input_levels,div_type,outname,col,legend=T,width=7,height=10,input_div=div){
+  # add a new col
+  sample_data(input_phy)$col_sel <- factor(unlist(sample_data(input_phy)[,colnames(meta(input_phy)) == selected_col]), levels = input_levels)
+  
+  # comparison
+  allcomb <- combn(input_levels,m = 2)
+  if(length(input_levels) >2){
+    my_compare <- lapply(1:dim(allcomb)[2],function(i){ allcomb[,i]})
+  }  else{
+    my_compare <- list(input_levels)
+  }
+  
+  # plot
+  alpha <- ggplot(aes_string( x = sample_data(input_phy)$col_sel , y = div_type, color = sample_data(input_phy)$col_sel),data=input_div)+
+    geom_boxplot(outlier.shape=NA,notch = T,alpha=0) +
+    scale_x_discrete(limits = levels(as.factor(sample_data(input_phy)$col_sel)))+
+    guides(fill = guide_legend(ncol = 1)) +
+    geom_point(size=0.5, position=position_jitterdodge(jitter.width =0.3,jitter.height=0,dodge.width=0.9)) +
+    scale_color_manual(values = col)+
+    xlab("") +
+    theme_bw()+
+    stat_compare_means(comparisons = my_compare, method = "wilcox.test", label = "p.format",na.rm = T)+
+    theme(strip.text.x = element_text(size = 15)) +
+    theme(text = element_text(size = 15,family = "sans")) +
+    theme(axis.text.x = element_text(angle = 45,size=12,vjust=1,hjust=1))+
+    theme(axis.text.y = element_text(size=15))
+  alpha$layers[[which_layers(alpha,"GeomSignif")]]$aes_params$family <- "sans"
+
+  if (legend != T ){
+    alpha <- alpha + theme(legend.position="none")
+  }
+  ggsave(alpha, filename = outname, dpi = 300, height = height, width =width, units = "cm")
+  #print(alpha)
+}
+```
+
+#### Table
+
+```{r , echo=F, message=F, warning=F}
+ps.alpha <- phyloseq::rarefy_even_depth(phy_tmp)
+
+# metat_alpha <- meta(ps.alpha ) 
+# dim(metat_alpha ) # 62 9
+# metat_alpha$Groups <- paste0(metat_alpha$Pre_or_Post,"_",metat_alpha$Groups)
+# metat_alpha$Groups <- factor(metat_alpha$Groups,levels = c("Pre_C","Post_C","Pre_T","Post_T"))
+# sample_data(ps.alpha) <- metat_alpha
+
+# get all index
+set.seed(971)
+div <- microbiome::alpha(ps.alpha,index="all")
+write.csv(div,file = "result/02_alpha.diversity/alpha_index_table_Groups.csv")
+```
+
+#### Auto plot of shannon, chao1 and simpson evenness
+
+```{r fig.height= 6, fig.width=4, fig.align='center',echo=F, message=F, warning=F}
+input_lvl <- c("NC","AD") 
+groups <- "Groups"
+
+for( i in c("diversity_shannon","chao1","evenness_simpson")){
+  plot_alpha(input_phy=ps.alpha,selected_col = groups,input_levels=input_lvl,div_type = i,
+           outname = paste0("result/02_alpha.diversity/alpha_",i,"_",groups,".pdf"),col = mycols,legend =F,width=15,height=17.5,input_div = div)
+}
+```
+
+#### Manuel plot
+```{r}
+#input_lvl <- c("control","slow","fast")
+input_phy=ps.alpha
+selected_col = "Groups"
+input_levels <- c("Pre_C","Post_C","Pre_T","Post_T")
+col = mycols
+legend =F
+width=15
+height = 13
+input_div = div
+
+for( div_type in c("diversity_shannon","chao1","evenness_simpson")){
+  
+  outname = paste0("alpha_",div_type,"_",selected_col,".pdf")
+  
+  sample_data(input_phy)$col_sel <- factor(unlist(sample_data(input_phy)[,colnames(meta(input_phy)) == selected_col]), levels = input_levels)
+  
+  # comparison
+  allcomb <- combn(input_levels,m = 2)
+  if(length(input_levels) >2){
+    my_compare <- lapply(1:dim(allcomb)[2],function(i){ allcomb[,i]})
+  }  else{
+    my_compare <- list(input_levels)
+  }
+  
+  # plot
+  alpha <- ggplot(aes_string( x = sample_data(input_phy)$col_sel , y = div_type, color = sample_data(input_phy)$col_sel),data=input_div)+
+    geom_boxplot(outlier.shape=NA,notch = T,alpha=0) +
+    scale_x_discrete(limits = levels(as.factor(sample_data(input_phy)$col_sel)))+
+    guides(fill = guide_legend(ncol = 1)) +
+    geom_point(size=0.5, position=position_jitterdodge(jitter.width =0.3,jitter.height=0,dodge.width=0.9)) +
+    scale_color_manual(values = col)+
+    xlab("") +
+    theme_bw()+
+    stat_compare_means(comparisons = my_compare, method = "wilcox.test", label = "p.format",na.rm = T)+
+    theme(strip.text.x = element_text(size = 15)) +
+    theme(text = element_text(size = 15,family = "sans")) +
+    theme(axis.text.x = element_text(angle = 45,size=15,vjust=1,hjust=1))+
+    theme(axis.text.y = element_text(size=15))
+  alpha$layers[[which_layers(alpha,"GeomSignif")]]$aes_params$family <- "sans"
+
+  if (legend != T ){
+    alpha <- alpha + theme(legend.position="none")
+  }
+  ggsave(alpha, filename = outname, dpi = 300, height = height, width =width, units = "cm")
+  #print(alpha)
+}
+```
+
+#### Manuel plot 2
+```{r}
+#groups = "Groups"
+merged_tab <- merge(div,meta(ps.alpha),by=0)
+dim(merged_tab) # 30 25=1+22+2
+
+allcomb <- combn(input_lvl,m = 2)
+my_compare <- lapply(1:dim(allcomb)[2],function(i){ allcomb[,i]})
+
+p1 <- ggpubr::ggviolin(merged_tab, x = groups, y = "diversity_shannon", fill = groups,
+         palette = mycols,
+         add = "boxplot", add.params = list(fill = "white"))+
+    stat_compare_means(comparisons = my_compare, method = "wilcox.test", label = "p.signif",na.rm = T)+
+  theme(legend.position = "none")+
+  scale_x_discrete(limits = input_lvl)+
+    theme(axis.text.x = element_text(angle = 45,size=12,hjust = 1))+
+  xlab("")
+
+p2 <- ggpubr::ggviolin(merged_tab, x = groups, y = "evenness_simpson", fill = groups,
+         palette =mycols,
+         add = "boxplot", add.params = list(fill = "white"))+
+    stat_compare_means(comparisons = my_compare, method = "wilcox.test", label = "p.signif",na.rm = T)+
+  theme(legend.position = "none")+
+    theme(axis.text.x = element_text(angle = 45,size=12,hjust = 1))+
+  scale_x_discrete(limits = input_lvl)+
+  xlab("")
+
+p3 <- ggpubr::ggviolin(merged_tab, x = groups, y = "chao1", fill = groups,
+         palette =mycols,
+         add = "boxplot", add.params = list(fill = "white"))+
+    stat_compare_means(comparisons = my_compare, method = "wilcox.test", label = "p.signif",na.rm = T)+
+  theme(legend.position = "none")+
+    theme(axis.text.x = element_text(angle = 45,size=12,hjust = 1))+
+  scale_x_discrete(limits = input_lvl)+
+  xlab("")
+
+p=p1+p2+p3
+ggsave(paste0("result/02_alpha.diversity/alpha_diversities_",groups,".pdf"),width = 18,height = 8)
+```
+
+
+## Taxa composition
+
+### Load library
+
+```{r load packages, results='hide', message=F, warning=F,include=F}
+# rm(list=ls())
+library(phyloseq)
+library(microbiome)
+library(tibble)
+library(dplyr)
+library(vegan)
+library(flextable)
+library(ggpubr)
+library(gginnards)
+# devtools::install_github("microsud/microbiomeutilities")
+library(microbiomeutilities)
+```
+
+```{r set color , include=F}
+# color set
+mycols <<- c(
+  "#3cb44b", "#4363d8", "#e6194b","#ffe119", 
+  "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#fabebe",
+  "#008080", "#e6beff", "#9a6324", "#fffac8", "#800000",
+  "#aaffc3", "#808000", "#ffd8b1", "#000075", "#808080",
+  "#000000"
+)
+
+```
+
+
+### Stacked plot
+```{r fig.height= 6, fig.width=5, fig.align='center',echo=F, message=F, warning=F}
+ps.sel <- phy_core
+group_level=c("Control","PD") 
+sample_data(ps.sel)$Groups <- factor(sample_data(ps.sel)$Groups1,levels = group_level)
+
+
+dir.create("result/04_compositiona/")
+# plot barplot for each taxon level
+for (levels in c("Phylum","Class","Order","Family","Genus","Species")){
+  # levels<-"Species"
+  if(levels=="Species"){  pseq <- ps.sel %>% subset_taxa( Species !="Unclassified") }else{ pseq <- ps.sel }
+    pseq <- pseq %>%
+    aggregate_taxa(level = levels) %>%
+    microbiome::transform(transform = "compositional") %>%
+    microbiomeutilities::aggregate_top_taxa2(top = 10, levels)
+  
+  p.bar <- microbiome::plot_composition(pseq,otu.sort = "abundance",  sample.sort = "Groups",average_by = "Groups") +
+    scale_fill_manual(values = mycols) +
+    # scale_x_discrete(limits =levels(factor(sample_data(pseq)$Groups,levels = c("Pre_C","Post_C","Pre_T","Post_T"))))+
+    guides(fill = guide_legend(ncol = 1)) +
+    ylab("Relative Abundance (%)") +
+    xlab("") +
+    guides(fill = guide_legend(levels)) +
+    theme_minimal() +
+    theme(strip.text.x = element_text(size = 15, face = "bold")) +
+    theme(text = element_text(size=15,family = "sans")) +
+    theme(axis.text.x = element_text(angle = 45, size = 15, face = "bold",vjust=1,hjust = 1))+
+    theme(axis.text.y=element_text(size=15),
+          axis.title.x=element_text(size=15),
+          axis.title.y = element_blank())+
+    theme(legend.text=element_text(size=15),
+          legend.title = element_text(size=15))+
+    scale_y_continuous(labels = scales::percent)
+  
+  ggsave(p.bar, device="pdf",
+         filename =  paste0("result/04_compositiona/composition_Groups_stacked.",levels,".pdf"), 
+         dpi = 300, height = 22, width = 15, units = "cm")
+  
+  if (levels == "Genus" || levels == "Species"){
+    ggsave(p.bar, device="pdf",
+         filename =  paste0("result/04_compositiona/composition_Groups_stacked.",levels,".pdf"), 
+         dpi = 300, height = 22, width = 15, units = "cm")
+  }
+    if (levels == "Order"){
+    ggsave(p.bar, device="pdf",
+         filename =  paste0("result/04_compositiona/composition_Groups_stacked.",levels,".pdf"), 
+         dpi = 300, height = 22, width = 15, units = "cm")
+  }
+}
+```
+
+### Individual plot
+
+```{r fig.height= 6, fig.width=5, fig.align='center',echo=F, message=F, warning=F}
+ps.sel <- phy_core
+sample_data(ps.sel)$Groups <- factor(sample_data(ps.sel)$Groups1,levels = group_level )
+
+# plot barplot for each taxon level
+for (levels in c("Phylum","Class","Order","Family","Genus","Species")){
+  if(levels=="Species"){  pseq <- ps.sel %>% subset_taxa( Species !="Unclassified") }else{ pseq <- ps.sel }
+    pseq <- pseq %>%
+    aggregate_taxa(level = levels) %>%
+    microbiome::transform(transform = "compositional") %>%
+    microbiomeutilities::aggregate_top_taxa2(top = 10, levels)
+  
+  p.bar <- microbiome::plot_composition(pseq,otu.sort = "abundance",  sample.sort = "Groups",group_by = "Groups") +
+    scale_fill_manual(values = mycols) +
+    #scale_x_discrete(limits =levels(factor(sample_data(pseq)$Groups,levels = c("G1","G2","G3","G4"))))+
+    guides(fill = guide_legend(ncol = 1)) +
+    ylab("Relative Abundance (%)") +
+    xlab("") +
+    guides(fill = guide_legend(levels)) +
+    theme_minimal() +
+    theme(strip.text.x = element_text(size = 15, face = "bold")) +
+    theme(text = element_text(size=15,family = "sans")) +
+    theme(axis.text.x = element_text(angle = 45, size = 10, face = "bold",vjust=1,hjust = 1))+
+    theme(axis.text.y=element_text(size=15),
+          axis.title.x=element_text(size=12),
+          axis.title.y = element_blank())+
+    theme(legend.text=element_text(size=15),
+          legend.title = element_text(size=15))+
+    scale_y_continuous(labels = scales::percent)
+  
+  ggsave(p.bar, device="pdf",
+         filename =  paste0("result/04_compositiona/composition_Groups_individual.",levels,".pdf"), 
+         dpi = 300, height = 20, width = 120, units = "cm")
+  
+  if (levels == "Genus"){
+    ggsave(p.bar, device="pdf",
+         filename =  paste0("result/04_compositiona/composition_Groups_individual.",levels,".pdf"), 
+         dpi = 300, height = 20, width = 120, units = "cm")
+  }
+    if (levels == "Species" || levels == "Order"){
+    ggsave(p.bar, device="pdf",
+         filename =  paste0("result/04_compositiona/composition_Groups_individual.",levels,".pdf"), 
+         dpi = 300, height = 20, width = 120, units = "cm")
+  }
+}
+```
+
+
+# linda
+
+```{r}
+library(LinDA)
+`%+%` <- function(a,b) {paste0(a,b)}
+
+
+my_linda<- function(pseq.temp,Groups_,my_rank,GROUP_VAR.formula,fil.names){
+  dir.create("result/05_linda")
+  fil.names <- "result/05_linda/"%+%Groups_ %+% "_"%+% my_rank 
+  pseq.new <- microbiome::aggregate_taxa(pseq.temp, my_rank)
+  ##
+  ## otu table and meta table
+  pseq.new.otu <- microbiome::abundances(pseq.new)
+  pseq.new.meta <- microbiome::meta(pseq.new)
+  
+  ### run Linda
+  pseq.new.linda <- linda(
+    otu.tab = pseq.new.otu,
+    meta = pseq.new.meta,
+    formula = GROUP_VAR.formula,
+    type = "count",
+    adaptive = TRUE,
+    imputation = FALSE,
+    pseudo.cnt = 0.5,
+    corr.cut = 0.1,
+    p.adj.method = "BH",
+    alpha = 0.1,
+    prev.cut = 0,
+    lib.cut = 1,
+    winsor.quan = NULL,
+    n.cores = 4
+  )
+  
+  ###
+  ## organize the results into a pretty dataframe for plotting.
+  sum_res <- pseq.new.linda$output[[names(pseq.new.linda$output)[grepl("Groups", names(pseq.new.linda$output))]]]
+  ## we can take only the significantly differential taxa
+  sig_linda <- subset(sum_res, reject == TRUE)
+  # Adding taxonomic labels
+  taxa_info <- data.frame(tax_table(pseq.new))
+  sig_linda <- merge(sig_linda, taxa_info, by = 0)
+  sum_res <- merge(sum_res, taxa_info, by = 0)
+  ##
+  ##
+  ## save the output for each comparison, reference shown on the file name
+  openxlsx::write.xlsx(sum_res, file = paste0(fil.names, "__all_LinDA_cal.xlsx"))
+  openxlsx::write.xlsx(sig_linda, file = paste0(fil.names, "__sig_linDA_cal.xlsx"))
+  
+  ## reformat the output for barplot
+  sig_linda$P.adj <-
+    ifelse(sig_linda$padj <= 0.05,
+           "< 0.05",
+           ifelse(sig_linda$padj <= 0.1 & sig_linda$padj > 0.05,
+                  "0.05 - 0.1",
+                  "0.1 - 0.2 "
+           )
+    )
+  ##
+  ### do not need to plot if there were no significantly differential taxa
+  if (nrow(sig_linda) > 0) {
+    ##
+    sig_linda$taxa <- sig_linda$Row.names
+    
+    ## one can also plot the results based on log fold change LFC but colored by padj range
+    sig_linda_filter<-sig_linda %>% dplyr::filter(P.adj<=0.05)
+    ggpubr::ggbarplot(sig_linda_filter,
+                      x = "taxa", y = "log2FoldChange",
+                      fill = "P.adj",
+                      color = "white",
+                      palette = c("#e6550d", "#636363", "#bdbdbd"),
+                      sort.val = "desc",
+                      sort.by.groups = FALSE,
+                      x.text.angle = 90,
+                      ylab = "log2FoldChange",
+                      xlab = "",
+                      rotate = TRUE,
+                      # title = paste0("[", notREF, "]", "-", "[", REF, "]"),
+                      ggtheme = theme_minimal()
+    )
+    ## save the plot
+    ##
+    ggsave(filename = paste0(fil.names, "__LinDA_cal_barplot.pdf"), width = 10)
+    
+    ### we could also color the bar by family or other rank levels if needed
+    ## one can also plot the results based on lfc.
+    ggpubr::ggbarplot(sig_linda,
+                      x = "taxa", y = "log2FoldChange",
+                      fill = "Family",
+                      color = "white",
+                      palette = unname(see::metro_colors(1:19)),
+                      sort.val = "desc",
+                      sort.by.groups = FALSE,
+                      x.text.angle = 90,
+                      ylab = "log2FoldChange",
+                      xlab = "",
+                      rotate = TRUE,
+                      # title = paste0("[", notREF, "]", "-", "[", REF, "]"),
+                      ggtheme = theme_minimal()
+    )
+    ##
+    ## save the plot
+    ggsave(filename = paste0(fil.names, "__LinDA_cal_barplot_FamilyColor.pdf"), width = 10)
+  }
+  
+}
+
+  
+# pseq.temp <- core(pseq.sub, detection = 1, prevalence = .2)
+
+
+my_linda(pseq.temp=phy_core,Groups_="NC_vs_PD",my_rank="Genus",GROUP_VAR.formula="~Groups1" ) # Groups must be in GROUP_VAR.formula 
+
+```
+
+# DESeq2
+
+```{r}
+library(DESeq2)
+library(phyloseq)
+library(microbiome)
+library(metagMisc)
+library(openxlsx)
+
+my_deseq2<- function(pseq.temp,Groups_,my_rank,GROUP_VAR.formula,fil.names){
+  dir.create("result/06_deseq2")
+  fil.names <- "result/06_deseq2/"%+%Groups_ %+% "_"%+% my_rank 
+  
+  ### here I rename all names (unreliable at all) with ASVs. But we must know they are ASVs not Species
+  ## better to make sure there are no improper names (empty) at Genus level
+  phyloseq::tax_table(pseq.temp)[, "Species"] <- rownames(phyloseq::tax_table(pseq.temp)[, "Species"])
+  
+  pseq.new <- microbiome::aggregate_taxa(pseq.temp, my_rank)
+  ##
+  ## otu table and meta table
+  pseq.new.otu <- microbiome::abundances(pseq.new)
+  pseq.new.meta <- microbiome::meta(pseq.new)
+  
+  
+  ## here we refer to the main interest even though one has to add several covariates like above
+  if("+" %in% GROUP_VAR.formula){MAIN <- trimws(GROUP_VAR.formula, whitespace = ".*\\+")}else{MAIN <-"Groups"}
+  
+
+
+  ## run DESeq2 using the following step, do not run directly with DESeq () function
+  gutdds <- phyloseq_to_deseq2(pseq.new, as.formula(GROUP_VAR.formula) )
+  gutdds <- estimateSizeFactors(gutdds, type = "poscounts")
+  gutdds <- estimateDispersions(gutdds, fitType = "parametric")
+  gutdds <- nbinomWaldTest(gutdds)
+  
+  # we can also use the following one, no big difference at all from the above classic DESeq2 way
+  # gutdds <- DESeq2::DESeq(gutdds,
+  #                         sfType = "poscounts",
+  #                         fitType = "glmGamPoi",
+  #                         test = "LRT",
+  #                         reduced = ~ 1 )
+  ##
+  REF <- unique(microbiome::meta(pseq.new)[, MAIN])[1]
+  notREF <- unique(microbiome::meta(pseq.new)[, MAIN])[2]
+  CONTRAST <- c(MAIN, notREF, REF)
+  ##
+  sum_res_deseq <- results(gutdds, contrast = CONTRAST)
+  sum_res <- as.data.frame(sum_res_deseq)
+  ## we can take only the significantly differential taxa
+  sig_deseq <- subset(sum_res, padj < 0.1)
+  # Adding taxonomic labels
+  taxa_info <- data.frame(tax_table(pseq.new))
+  sum_res <- merge(sum_res, taxa_info, by = 0)
+  sig_deseq <- merge(sig_deseq, taxa_info, by = 0)
+  
+  ##
+  # fil.names.new <- paste0(fil.names, "_***", REF, "_as_reference***")
+  ## save the output for each comparison, reference shown on the file name
+  openxlsx::write.xlsx(sum_res, file = paste0(fil.names, "__all_DESeq2_cal.xlsx"))
+  openxlsx::write.xlsx(sig_deseq, file = paste0(fil.names, "__sig_DESeq2_cal.xlsx"))
+  
+  ## reformat the output for barplot
+  sig_deseq$P.adj <-
+    ifelse(sig_deseq$padj <= 0.05,
+           "< 0.05",
+           ifelse(sig_deseq$padj <= 0.1 & sig_deseq$padj > 0.05,
+                  "0.05 - 0.1",
+                  "0.1 - 0.2 "
+           )
+    )
+  ##
+  ### do not need to plot if there were no significantly differential taxa
+  if (nrow(sig_deseq) > 0) {
+    ##
+    sig_deseq$taxa <- sig_deseq$Row.names
+    
+    ## one can also plot the results based on log fold change LFC but colored by padj range
+    ggpubr::ggbarplot(sig_deseq,
+                      x = "taxa", y = "log2FoldChange",
+                      fill = "P.adj",
+                      color = "white",
+                      palette = c("#e6550d", "#636363", "#bdbdbd"),
+                      sort.val = "desc",
+                      sort.by.groups = FALSE,
+                      x.text.angle = 90,
+                      ylab = "log2FoldChange",
+                      xlab = "",
+                      rotate = TRUE,
+                      title = paste0("[", notREF, "]", "-", "[", REF, "]"),
+                      ggtheme = theme_minimal()
+    )
+    ## save the plot
+    ##
+    ggsave(filename = paste0(fil.names, "__DESeq2_cal_barplot.pdf"), width = 10)
+    
+    ### we could also color the bar by family or other rank levels if needed
+    ## one can also plot the results based on lfc.
+    ggpubr::ggbarplot(sig_deseq,
+                      x = "taxa", y = "log2FoldChange",
+                      fill =my_rank,
+                      color = "white",
+                      palette = unname(see::metro_colors(1:19)),
+                      sort.val = "desc",
+                      sort.by.groups = FALSE,
+                      x.text.angle = 90,
+                      ylab = "log2FoldChange",
+                      xlab = "",
+                      rotate = TRUE,
+                      title = paste0("[", notREF, "]", "-", "[", REF, "]"),
+                      ggtheme = theme_minimal()
+    )
+    ##
+    ## save the plot
+    ggsave(filename = paste0(fil.names, my_rank,"__DESeq2_cal_barplot_FamilyColor.pdf"), width = 10)
+  }
+}
+
+
+# pseq.temp <- core(pseq.sub, detection = 1, prevalence = .2)
+my_deseq2(pseq.temp=phy_core,Groups_="A_vs_B",my_rank="Genus",GROUP_VAR.formula="~Groups" ) # Groups must be in GROUP_VAR.formula 
+
+```
+# ANCOMBC
+
+```{r}
+library(ANCOMBC)
+library(phyloseq)
+library(microbiome)
+library(metagMisc)
+library(openxlsx)
+`%+%` <- function(a,b) {paste0(a,b)}
+
+my_ancombc<- function(pseq.temp,Groups_,my_rank,GROUP_VAR.formula,fil.names){
+  dir.create("result/07_ancombc")
+  fil.names <- "result/07_ancombc/"%+%Groups_ %+% "_"%+% my_rank 
+  
+  ### here I rename all names (unreliable at all) with ASVs. But we must know they are ASVs not Species
+  ## better to make sure there are no improper names (empty) at Genus level
+  phyloseq::tax_table(pseq.temp)[, "Species"] <- rownames(phyloseq::tax_table(pseq.temp)[, "Species"])
+  
+  pseq.new <- microbiome::aggregate_taxa(pseq.temp, my_rank)
+  ##
+  ## otu table and meta table
+  pseq.new.otu <- microbiome::abundances(pseq.new)
+  pseq.new.meta <- microbiome::meta(pseq.new)
+  
+
+  ## here we refer to the main interest even though one has to add several covariates like above
+  # MAIN <- trimws(GROUP_VAR, whitespace = ".*\\+")
+  if("+" %in% GROUP_VAR.formula){MAIN <- trimws(GROUP_VAR.formula, whitespace = ".*\\+")}else{MAIN <-"Groups"}
+  
+  # Run ancombc function
+  out <- ancombc(
+    phyloseq = pseq.new, formula = GROUP_VAR.formula,
+    p_adj_method = "fdr", zero_cut = 0.90, lib_cut = 1000,
+    group = MAIN, struc_zero = TRUE, neg_lb = FALSE,
+    tol = 1e-5, max_iter = 100, conserve = TRUE,
+    alpha = 0.1, global = FALSE
+  )
+  
+  ## organize the results into a pretty dataframe for plotting.
+  
+  sum_res <- data.frame(
+    row.names = rownames(out$res$beta),
+    diff_taxa = out$res$diff_abn[, 1], # getting the differential taxa
+    LFC = out$res$beta[, 1], # getting the foldchange
+    se = out$res$se[, 1], # getting the standard error of the estimate of foldchange
+    pval = out$res$p_val[, 1], # getting the raw p value
+    W = out$res$W[, 1], # getting the information regarding the test statistics
+    padj = out$res$q_val[, 1] # getting the adjusted p-value
+  )
+  ## we can take only the significantly differential taxa
+  sig_ancombc <- subset(sum_res, diff_taxa == TRUE)
+  # Adding taxonomic labels
+  taxa_info <- data.frame(tax_table(pseq.new))
+  sig_ancombc <- merge(sig_ancombc, taxa_info, by = 0)
+  sum_res <- merge(sum_res, taxa_info, by = 0)
+  ##
+  ## take the reference level
+  # notREF <- gsub(pattern = MAIN, replacement = "", names(out[["res"]][["beta"]])   )
+  # REF <- gsub(pattern = paste0("_vs_", notREF), replacement = "", fil.names)
+  
+  # fil.names.new <- paste0(fil.names, "_***", REF, "_as_reference***")
+  ## save the output for each comparison, reference shown on the file name
+  openxlsx::write.xlsx(sum_res, file = paste0(fil.names, "__all_ancombc_cal.xlsx"))
+  openxlsx::write.xlsx(sig_ancombc, file = paste0(fil.names, "__sig_ancombc_cal.xlsx"))
+  
+  ## reformat the output for barplot
+  sig_ancombc$P.adj <-
+    ifelse(sig_ancombc$padj <= 0.05,
+           "< 0.05",
+           ifelse(sig_ancombc$padj <= 0.1 & sig_ancombc$padj > 0.05,
+                  "0.05 - 0.1",
+                  "0.1 - 0.2 "
+           )
+    )
+  ##
+  ### do not need to plot if there were no significantly differential taxa
+  if (nrow(sig_ancombc) > 0) {
+    ##
+    sig_ancombc$taxa <- sig_ancombc$Row.names
+    
+    ## one can also plot the results based on log fold change LFC but colored by padj range
+    ggpubr::ggbarplot(sig_ancombc,
+                      x = "taxa", y = "LFC",
+                      fill = "P.adj",
+                      color = "white",
+                      palette = c("#e6550d", "#636363", "#bdbdbd"),
+                      sort.val = "desc",
+                      sort.by.groups = FALSE,
+                      x.text.angle = 90,
+                      ylab = "LFC",
+                      xlab = "",
+                      rotate = TRUE,
+                      title = paste0("[", notREF, "]", "-", "[", REF, "]"),
+                      ggtheme = theme_minimal()
+    ) +
+      geom_errorbar(aes(ymin = LFC - se, ymax = LFC + se),
+                    width = 0.2,
+                    position = position_dodge(0.05), color = "black"
+      )
+    ## save the plot
+    ##
+    ggsave(filename = paste0(fil.names, "__ANCOMBC_cal_barplot.pdf"), width = 10)
+    
+    ### we could also color the bar by family or other rank levels if needed
+    ## one can also plot the results based on lfc.
+    ggpubr::ggbarplot(sig_ancombc,
+                      x = "taxa", y = "LFC",
+                      fill = "Family",
+                      color = "white",
+                      palette = unname(see::metro_colors(1:19)),
+                      sort.val = "desc",
+                      sort.by.groups = FALSE,
+                      x.text.angle = 90,
+                      ylab = "LFC",
+                      xlab = "",
+                      rotate = TRUE,
+                      title = paste0("[", notREF, "]", "-", "[", REF, "]"),
+                      ggtheme = theme_minimal()
+    ) +
+      geom_errorbar(aes(ymin = LFC - se, ymax = LFC + se),
+                    width = 0.2,
+                    position = position_dodge(0.05), color = "black"
+      )
+    ##
+    ## save the plot
+    ggsave(filename = paste0(fil.names, "__ANCOMBC_cal_barplot_FamilyColor.pdf"), width = 10)
+  }
+}
+
+# pseq.temp <- core(pseq.sub, detection = 1, prevalence = .2)
+
+
+my_ancombc(pseq.temp=phy_core,Groups_="A_vs_B",my_rank="Genus",GROUP_VAR.formula="Groups" ) # Groups must be in GROUP_VAR.formula 
+
+```
+

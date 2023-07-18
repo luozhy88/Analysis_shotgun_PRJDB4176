@@ -1,0 +1,112 @@
+```{r}
+library(dplyr)
+```
+
+
+```{r}
+meta_df <- read.csv("../input_raw/SRP373424_meta.csv")
+rownames(meta_df)<-meta_df$Run
+meta_df$Age<-meta_df$Age_at_collection %>% as.integer()
+meta_df$Groups1<-meta_df$Case_status
+meta_df$Gender<-meta_df$sex
+```
+
+## 年龄分段
+
+```{r}
+meta_df=meta_df %>%mutate(Age_group = cut(Age, breaks = seq(20, 90, 10), include.lowest = TRUE)) 
+meta_df$Age_group
+meta_df$Gender
+```
+
+### 所有样本年龄分部
+
+```{r}
+table(meta_df$Age_group,meta_df$Gender)
+```
+### 健康人群及其分布
+
+```{r}
+meta_df_NC=dplyr::filter(meta_df,!(Depression_anxiety_mood_med == "Y" | Diabetes_Med == "Y" |  Blood_pressure_med == "Y" ) )
+table(meta_df_NC$Age,meta_df_NC$Gender)
+```
+
+#### 男性健康人群及其分布
+
+```{r}
+meta_df_NC.male<-meta_df_NC %>% dplyr::filter(Gender == "male")
+meta_df_NC.male$Age
+
+#train
+balanced_sample.male.train <- meta_df_NC.male %>%
+  group_by(Age) %>%
+  sample_n(1) %>%
+  ungroup()
+
+table(balanced_sample.male.train$Age,balanced_sample.male.train$Gender)
+write.csv(balanced_sample.male.train,"balanced_sample.male_train.csv",row.names = F)
+
+#test
+diff_ID<- setdiff(meta_df_NC.male$Run,balanced_sample.male.train$Run)
+balanced_sample.male.test <- meta_df_NC.male[diff_ID,]
+table(balanced_sample.male.test$Age,balanced_sample.male.test$Gender)
+write.csv(balanced_sample.male.test,"balanced_sample.male.test.csv",row.names = F)
+```
+
+
+#### 女性健康人群及其分布
+
+```{r}
+meta_df_NC.female<-meta_df_NC %>% dplyr::filter(Gender == "female")
+meta_df_NC.female$Age
+
+#train
+balanced_sample.female.train <- meta_df_NC.female %>%
+  group_by(Age) %>%
+  sample_n(1) %>%
+  ungroup()
+
+table(balanced_sample.female.train$Age,balanced_sample.female.train$Gender)
+write.csv(balanced_sample.female.train,"balanced_sample.female_train.csv",row.names = F)
+
+#test
+diff_ID<- setdiff(meta_df_NC.female$Run,balanced_sample.female.train$Run)
+balanced_sample.female.test <- meta_df_NC.female[diff_ID,]
+table(balanced_sample.female.test$Age,balanced_sample.female.test$Gender)
+write.csv(balanced_sample.female.test,"balanced_sample.female.test.csv",row.names = F)
+```
+
+
+
+#### 不同性别每个年龄段取2个样本及分布
+```{r}
+#train
+n <- 2  # 取样本的数量
+balanced_sample_Gender.train <- meta_df %>%
+  group_by(Age, Gender) %>%
+  sample_n(if_else(n > n()/2, n()/2, n)) %>%
+  ungroup()
+table(balanced_sample_Gender.train$Age,balanced_sample_Gender.train$Gender)
+write.csv(balanced_sample_Gender.train,"balanced_sample_Gender.train.csv",row.names = F)
+
+
+
+#test
+diff_ID<- setdiff(meta_df$Run,balanced_sample_Gender.train$Run)
+balanced_sample_Gender.test <- meta_df[diff_ID,]
+table(balanced_sample_Gender.test$Age,balanced_sample_Gender.test$Gender)
+write.csv(balanced_sample_Gender.test,"balanced_sample_Gender.test.csv",row.names = F)
+```
+
+# save
+```{r}
+save(
+  balanced_sample.male.train,
+  balanced_sample.male.test,
+  balanced_sample.female.train,
+  balanced_sample.female.test,
+  balanced_sample_Gender.train,
+  balanced_sample_Gender.test,
+     file ="Distribution.RData")
+```
+

@@ -1,0 +1,13 @@
+"no.","name","engine","tuning","accuracy","auc","f1"
+1,"ranger_model","ranger","basic",0.75,0.859375,0.75
+2,"xgboost_model","xgboost","basic",0.75,0.875,0.75
+5,"ranger_RS_2","ranger","random_search",0.6875,0.859375,0.666666666666667
+3,"decision_tree_model","decision_tree","basic",0.625,0.546875,0.5
+4,"ranger_RS_1","ranger","random_search",0.625,0.765625,0.571428571428572
+6,"ranger_RS_3","ranger","random_search",0.625,0.640625,0.7
+7,"xgboost_RS_1","xgboost","random_search",0.625,0.7578125,0.571428571428572
+9,"xgboost_RS_3","xgboost","random_search",0.625,0.71875,0.571428571428572
+10,"decision_tree_RS_1","decision_tree","random_search",0.625,0.546875,0.5
+11,"decision_tree_RS_2","decision_tree","random_search",0.625,0.546875,0.5
+12,"decision_tree_RS_3","decision_tree","random_search",0.625,0.546875,0.5
+8,"xgboost_RS_2","xgboost","random_search",0.5625,0.671875,0.533333333333333

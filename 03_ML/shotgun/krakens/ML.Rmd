@@ -1,0 +1,127 @@
+
+```{r}
+library(phyloseq)
+library(dplyr)
+library(tibble)
+library(ggplot2)
+source("../function/function.R")
+```
+
+
+
+```{r}
+load("../01_statistical_analysis/Distribution.RData")
+shotgun_phyloseq <- readRDS("../input_raw/shotgun_phyloseq.rds")
+meta_all<-read.csv("../input_raw/SRP373424_meta.csv")
+meta_all$Age<-meta_all$Age_at_collection
+rownames(meta_all)<-meta_all$Run
+
+sample_names(shotgun_phyloseq) =gsub(".bracken.mpa.report.*","",sample.names(shotgun_phyloseq))
+sample_data(shotgun_phyloseq)<-meta_all
+
+shotgun_phyloseq_core <- microbiome::core(shotgun_phyloseq, detection = 5, prevalence = .2)
+```
+
+## male
+```{r}
+balanced_sample.male.train
+balanced_sample.male.test
+
+# 从 phyloseq 对象中筛选出特定的样本
+my_samples <- c(balanced_sample.male.train$Run,balanced_sample.male.test$Run) # 要筛选的样本名称
+shotgun_phyloseq_core_subset <- subset_samples(shotgun_phyloseq_core, Run %in% my_samples)
+
+# 查看新的 phyloseq 对象
+shotgun_phyloseq_core_subset
+shotgun_phyloseq_core_subset.tss.level <- microbiome::aggregate_taxa(shotgun_phyloseq_core_subset,level = "Genus") %>%microbiome::transform(transform = "compositional")
+OTU_table<-otu_table(shotgun_phyloseq_core_subset.tss.level) %>% t() %>% data.frame()
+
+age_df<-meta_all %>% dplyr::select(Age)
+OTU_table_age<-merge(age_df,OTU_table,by=0 ) 
+OTU_table_age<-column_to_rownames(OTU_table_age,"Row.names")%>% data.frame()
+mbalanced_sample.male.train_otu<-OTU_table_age[balanced_sample.male.train$Run,]
+mbalanced_sample.male.test_otu<-OTU_table_age[balanced_sample.male.test$Run,]
+
+```
+
+### ML
+```{r}
+# install.packages('DALEX')
+# install.packages('devtools')
+# install_github('ModelOriented/forester')
+library(devtools)
+library(DALEX)
+library(forester)
+library(dplyr)
+# data(lisbon)
+# View(lisbon)
+project_name="shotgun_male_test5_"
+# iris5<-iris #%>% dplyr::filter(Species != "virginica")
+target_name='Age'
+df_train<-mbalanced_sample.male.train_otu
+df_test<-mbalanced_sample.male.train_otu
+output2 <- train(data = df_train,
+                 y = 'Age',
+                 bayes_iter = 0,
+                 # engine = c('ranger', 'xgboost', 'decision_tree'),
+                 engine = c('xgboost'),
+                 verbose = FALSE,
+                 sort_by = 'mse',
+                 advanced_preprocessing = TRUE,
+                 random_evals = 1)
+
+output2$score_test
+best_model_name=output2$score_test$engine[1]
+
+exp_list <- forester::explain(models = output2$best_models[[1]],
+                              test_data = output2$test_data,
+                              y = output2$y)
+exp <- exp_list[[1]]
+p1 <- DALEX::model_parts(exp)
+plot(p1)
+
+
+# 重要特征和RMSE 绘图
+draw_feature_importance_plot=draw_feature_importance2(output2$models_list,output2$test_data,output2$y)
+draw_Rmse_plot=draw_rmse_plot(
+  train_observed= output2$train_observed,
+  train_predictions=output2$predictions_train,
+  test_observed=output2$test_observed,
+  test_predictions=output2$predictions_all,
+  models=output2$models_list)
+show(draw_Rmse_plot)
+
+pdf(glue::glue(project_name,"best.model_draw_feature_importance_plot.pdf"))
+draw_feature_importance_plot
+dev.off() 
+
+pdf(glue::glue(project_name,"best.model_draw_Rmse_plot.pdf"))
+draw_Rmse_plot
+dev.off() 
+
+# 外部测试集散点图
+predictions <- predict_new(output2, data = df_test)
+predictions$xgboost_model
+
+true_values <- df_test[,target_name]
+diff_values <-  predictions[[1]]-true_values
+
+data <- data.frame(true_values = true_values, diff_values = diff_values)
+
+# 创建散点图和回归线
+diff_plot=ggplot(data, aes(x = true_values, y = diff_values)) +
+              geom_point() +
+              geom_smooth(method = "lm", se = FALSE, color = "red") +
+              labs(title = "True vs. diff Values", x = "True Values", y = "diff Values")
+
+
+
+saveRDS(output2,glue::glue(project_name,"best.model_",best_model_name,".rds"))
+write.csv(output2$score_test,glue::glue(project_name,"different.models.scores.csv"),row.names = F)
+
+pdf(glue::glue(project_name,"best.model_diff_plot.pdf"))
+diff_plot
+dev.off() 
+
+```
+
