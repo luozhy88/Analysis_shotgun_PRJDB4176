@@ -1,4 +1,4 @@
-
+rm(list=ls())
 library(phyloseq)
 library(dplyr)
 library(tibble)
